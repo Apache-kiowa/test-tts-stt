@@ -1,0 +1,4 @@
+-r base.txt
+torch>=2.2
+omegaconf
+silero-stress>=1.5

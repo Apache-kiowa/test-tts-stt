@@ -1,0 +1,9 @@
+venvs/
+vendor/
+logs/
+outputs/
+data/
+models/
+refs/
+config.env
+__pycache__/

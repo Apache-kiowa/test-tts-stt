@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTS Lab — управление</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <h1>TTS Lab <span>управление моделями на сервере</span></h1>
+  <span class="pill" id="statusPill"><span class="dot"></span><span>…</span></span>
+  <nav class="nav"><a href="/">Тест</a><a href="/bench">Скорость</a><a href="/admin" aria-current="page">Управление</a></nav>
+</header>
+
+<div class="wrap">
+  <section>
+    <div class="section-head">
+      <h2>Сейчас работает</h2>
+      <button id="restart">Перезапустить</button>
+      <button id="stop" class="danger">Остановить</button>
+      <button id="freePort" hidden>Освободить порт</button>
+    </div>
+    <div class="readout"><dl class="kv" id="current"><dt>Состояние</dt><dd>загружаю…</dd></dl></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Модели</h2>
+      <small class="muted">Работает одна модель: запуск новой останавливает текущую и освобождает видеопамять. Адрес API не меняется.</small>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Модель</th><th>Параметры загрузки</th><th>Установлена</th><th></th></tr></thead>
+      <tbody id="models"></tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>Подключение по локальной сети</h2>
+    <div class="readout stack">
+      <p>API совместим с OpenAI (<code>POST /v1/audio/speech</code>): любая программа в сети подключается как к OpenAI, указав этот адрес.</p>
+      <dl class="kv" id="lan"></dl>
+      <small class="hint">Нажмите на значение, чтобы скопировать. Ключ задаётся в config.env (TTS_API_KEY), пусто — без ключа.</small>
+      <details class="group"><summary>Примеры запросов</summary><div class="stack" id="curls"></div></details>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Логи</h2>
+      <div class="tabs" id="logTabs" role="group" aria-label="Источник логов">
+        <button data-src="worker" aria-pressed="true">Модель</button>
+        <button data-src="requests" aria-pressed="false">Запросы</button>
+        <button data-src="worker_raw" aria-pressed="false">Вывод процесса</button>
+        <button data-src="install" aria-pressed="false">Установка</button>
+        <button data-src="panel" aria-pressed="false">Панель</button>
+      </div>
+      <label class="check"><input type="checkbox" id="logAuto" checked> обновлять</label>
+      <select id="logLines" aria-label="Сколько строк" style="width:auto"><option>200</option><option selected>500</option><option>2000</option></select>
+      <a class="btn" id="logDownload" href="#">Скачать</a>
+      <button id="logClear" class="ghost danger">Очистить</button>
+    </div>
+    <div class="log" id="log" tabindex="0" aria-label="Логи"></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Словарь произношений</h2>
+      <button id="dictSave" class="primary">Сохранить словарь</button>
+    </div>
+    <div class="stack">
+      <small class="hint">Применяется до остальной нормализации во всех моделях. Формат: <code>что =&gt; как читать</code>, по одному правилу в строке. Регулярное выражение: <code>re: шаблон =&gt; замена</code>. Строки с # — комментарии.</small>
+      <textarea id="dict" rows="10" spellcheck="false"></textarea>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Голоса-образцы</h2>
+      <small class="muted">Нужны ESpeech и F5 (без образца они не говорят), остальным — по желанию. Положите WAV на 5–12 секунд и точную расшифровку.</small>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Имя</th><th>Прослушать</th><th>Расшифровка</th><th></th></tr></thead><tbody id="refs"></tbody></table></div>
+    <form id="refForm" class="readout grid2" style="margin-top:12px">
+      <label class="field" for="refName"><span><b>Имя</b></span><input id="refName" name="name" type="text" required placeholder="my_voice"></label>
+      <label class="field" for="refFile"><span><b>Файл (WAV; mp3/m4a — если есть ffmpeg)</b></span><input id="refFile" name="file" type="file" accept="audio/*" required></label>
+      <label class="field" for="refText" style="grid-column:1/-1"><span><b>Что сказано в записи</b></span><textarea id="refText" name="text" rows="2" required></textarea></label>
+      <div><button class="primary" type="submit">Добавить образец</button></div>
+    </form>
+  </section>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+let MODELS = [], CFG = {}, STATUS = {}, logSrc = "worker";
+
+function loadOptsFor(id) { return store.get("load." + id, null); }
+
+function renderModels() {
+  const active = STATUS.state?.running ? STATUS.state.model : null;
+  $("#models").innerHTML = MODELS.map((m) => {
+    const lo = { ...Object.fromEntries((m.load_options || []).map((f) => [f.key, f.default])), ...(loadOptsFor(m.id) || {}) };
+    const inst = m.installed;
+    const instText = !inst.env ? `<span class="err">нет окружения</span><br><small>./install.sh ${m.id}</small>` : inst.weights ? `да<br><small>${esc(inst.installed_at || "")}</small>` : `окружение есть, веса скачаются при запуске`;
+    return `<tr data-id="${m.id}" class="${m.id === active ? "active" : ""}">
+      <td><b>${esc(m.title)}</b><br><small class="muted">${esc(m.summary)}</small><br><small class="muted">Лицензия: ${esc(m.license)}. Размер: ${esc(m.size)}. Видеокарта: ${esc(m.gpu || "—")}</small></td>
+      <td><div class="stack" style="min-width:200px">${(m.load_options || []).map((f) => fieldHtml(f, lo[f.key])).join("") || '<small class="muted">нет</small>'}</div></td>
+      <td>${instText}</td>
+      <td><div class="stack">
+        <button class="primary start" ${inst.env ? "" : "disabled"}>${m.id === active ? "Перезапустить" : "Запустить"}</button>
+        ${m.id !== "test-tone" ? `<button class="download" ${inst.env ? "" : "disabled"}>Скачать веса</button>` : ""}
+      </div></td></tr>`;
+  }).join("");
+  $$("#models tr").forEach((tr) => {
+    const id = tr.dataset.id;
+    $$("[data-key]", tr).forEach((el) => el.addEventListener("change", () => store.set("load." + id, readFields(tr))));
+    $(".start", tr).onclick = () => start(id, readFields(tr));
+    const d = $(".download", tr);
+    if (d) d.onclick = async () => {
+      try { await api("/api/download", { json: { model: id, load_options: readFields(tr) } }); toast("Скачивание началось — смотрите логи «Установка»"); selectLog("install"); }
+      catch (e) { toast(e.message); }
+    };
+  });
+}
+
+async function start(id, loadOptions, force = false) {
+  try {
+    await api("/api/start", { json: { model: id, load_options: loadOptions, force } });
+    toast("Запускаю " + (MODELS.find((m) => m.id === id)?.title || id));
+    selectLog("worker");
+    setTimeout(refresh, 800);
+  } catch (e) {
+    if (e.message.includes("занят") && confirm(e.message + "\n\nЗавершить процесс, который держит порт, и запустить модель?")) return start(id, loadOptions, true);
+    alert(e.message);
+  }
+}
+
+$("#stop").onclick = async () => { await api("/api/stop", { method: "POST" }); toast("Остановлено"); refresh(); };
+$("#restart").onclick = () => { const st = STATUS.state; if (st?.model) start(st.model, st.load_options); };
+$("#freePort").onclick = async () => { const r = await api("/api/free-port", { method: "POST" }); toast(r.busy ? "Порт всё ещё занят" : "Порт свободен"); refresh(); };
+
+function gpuRows() {
+  const g = STATUS.gpus || [];
+  if (!g.length) return [["Видеокарта", "не найдена — модели работают на процессоре"]];
+  return g.map((x, i) => [g.length > 1 ? `GPU ${i}` : "Видеокарта", `${esc(x.name)}: память ${(x.mem_used / 1024).toFixed(1)} из ${(x.mem_total / 1024).toFixed(1)} ГБ, загрузка ${x.util}%, ${x.temp}°C`]);
+}
+
+async function refresh() {
+  STATUS = await api("/api/status").catch(() => ({}));
+  const st = STATUS.state || {}, w = STATUS.worker || {};
+  const s = st.running ? (w.status || "starting") : "stopped";
+  $("#statusPill").innerHTML = `<span class="dot ${s}"></span><span>${st.running ? esc(st.title) + " — " + (STATUS_RU[s] || s) : "модель не запущена"}</span>`;
+  const rows = st.running ? [
+    ["Модель", esc(st.title || st.model)],
+    ["Состояние", `<span class="dot ${s}" style="display:inline-block"></span> ${STATUS_RU[s] || s}${w.error ? `<div class="err">${esc(w.error)}</div>` : ""}`],
+    ["API", `http://${(CFG.lan_ips || ["127.0.0.1"])[0]}:${st.port}/v1`],
+    ["PID", st.pid], ["Запущена", st.started_str], ["Загрузка заняла", w.load_time_s != null ? w.load_time_s + " с" : "—"],
+    ["Запросов", w.requests ?? 0], ["Параметры", esc(JSON.stringify(st.load_options))],
+    ...gpuRows(),
+  ] : [...gpuRows(), ["Состояние", STATUS.port_busy ? `порт ${CFG.tts_port} занят чужим процессом ${esc((STATUS.foreign_pids || []).join(", "))}` : "модель не запущена — выберите её в списке ниже"]];
+  if (!st.running && !rows.length) rows.push(["Состояние", "модель не запущена"]);
+  $("#current").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("#freePort").hidden = !(STATUS.port_busy && !st.running);
+  $("#stop").disabled = $("#restart").disabled = !st.running;
+  $$("#models tr").forEach((tr) => {
+    const on = st.running && tr.dataset.id === st.model;
+    tr.classList.toggle("active", on);
+    const b = $(".start", tr); if (b && !b.disabled) b.textContent = on ? "Перезапустить" : "Запустить";
+  });
+}
+
+function renderLan() {
+  const ip = (CFG.lan_ips || [])[0] || location.hostname;
+  const base = `http://${ip}:${CFG.tts_port}/v1`;
+  const key = CFG.tts_api_key || "";
+  const rows = [["Адрес API (base_url)", base], ["Ключ", key || "не нужен"], ["Модель", CFG.model_alias], ["Голоса", "alloy и др. — голос из настроек; можно имя голоса модели, напр. kseniya"]];
+  $("#lan").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd><code class="copy" title="Скопировать">${esc(v)}</code></dd>`).join("") +
+    (CFG.lan_ips?.length > 1 ? `<dt>Другие IP</dt><dd>${CFG.lan_ips.slice(1).map(esc).join(", ")}</dd>` : "");
+  $$("#lan .copy").forEach((c) => (c.onclick = () => copyText(c.textContent)));
+  const auth = key ? ` -H "Authorization: Bearer ${key}"` : "";
+  const cmds = [
+    ["curl", `curl ${base}/audio/speech${auth} -H "Content-Type: application/json" -d '{"model":"${CFG.model_alias}","input":"Записываю вас на 17:00, врач Дорохов С. А.","voice":"alloy","response_format":"wav"}' -o test.wav`],
+    ["Python (openai)", `from openai import OpenAI\nclient = OpenAI(base_url="${base}", api_key="${key || "none"}")\nwith client.audio.speech.with_streaming_response.create(\n    model="${CFG.model_alias}", voice="alloy", input="Записываю вас на 17:00", response_format="wav",\n    extra_body={"settings": {"initials": "drop"}},\n) as r:\n    r.stream_to_file("test.wav")`],
+    ["Python (requests)", `import requests\nr = requests.post("${base}/audio/speech", json={"input": "Записываю вас на 17:00", "settings": {"time_style": "short"}}${key ? `, headers={"Authorization": "Bearer ${key}"}` : ""})\nopen("test.wav", "wb").write(r.content)`],
+    ["Состояние", `curl http://${ip}:${CFG.tts_port}/health`],
+  ];
+  $("#curls").innerHTML = cmds.map(([t, c]) => `<div><small class="muted">${esc(t)}</small><pre class="log copy" style="height:auto;margin:4px 0 0">${esc(c)}</pre></div>`).join("");
+  $$("#curls .copy").forEach((c) => (c.onclick = () => copyText(c.textContent)));
+}
+
+/* ---------- логи ---------- */
+function selectLog(src) {
+  logSrc = src;
+  $$("#logTabs button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.src === src));
+  $("#logDownload").href = `/api/logs/download?source=${src}`;
+  loadLog(true);
+}
+$$("#logTabs button").forEach((b) => (b.onclick = () => selectLog(b.dataset.src)));
+$("#logClear").onclick = async () => { if (confirm("Очистить этот лог?")) { await api(`/api/logs?source=${logSrc}`, { method: "DELETE" }); loadLog(true); } };
+$("#logLines").onchange = () => loadLog(true);
+
+function fmtRequest(line) {
+  try {
+    const r = JSON.parse(line);
+    if (r.ok === false) return `<span class="e">${esc(r.ts)}  ${esc(r.model || r.via || "")}  ОШИБКА ${esc(r.status || "")}: ${esc(r.error)}\n    текст: ${esc(r.input)}</span>`;
+    return `<span class="i">${esc(r.ts)}  ${esc(r.model)}  ${r.chars} симв. → ${r.audio_s} с аудио за ${r.gen_time} с (RTF ${r.rtf}), ${esc(r.out_format)}, от ${esc(r.client)}\n    текст:     ${esc(r.input)}\n    прочитано: ${esc(r.normalized)}</span>`;
+  } catch { return esc(line); }
+}
+async function loadLog(scroll) {
+  const el = $("#log");
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+  const r = await api(`/api/logs?source=${logSrc}&lines=${$("#logLines").value}`).catch((e) => ({ lines: [e.message] }));
+  el.innerHTML = r.lines.length ? r.lines.map((l) => logSrc === "requests" ? fmtRequest(l) : `<span class="${/ERROR|Traceback|Error/.test(l) ? "e" : /WARN/.test(l) ? "w" : "i"}">${esc(l)}</span>`).join("\n") : '<span class="w">Лог пуст</span>';
+  if (scroll || atBottom) el.scrollTop = el.scrollHeight;
+}
+setInterval(() => { if ($("#logAuto").checked) loadLog(false); }, 2500);
+
+/* ---------- словарь ---------- */
+const DICT_EXAMPLE = `# Примеры (уберите # в начале строки, чтобы включить)
+# ОМС => о эм эс
+# МРТ => эм эр тэ
+# УЗИ => узи
+# Дорохов => Дор+охов
+# re: \\bд-р\\b => доктор
+`;
+async function loadDict() { const t = await (await fetch("/api/dictionary")).text(); $("#dict").value = t || DICT_EXAMPLE; }
+$("#dictSave").onclick = async () => { await fetch("/api/dictionary", { method: "PUT", body: $("#dict").value }); toast("Словарь сохранён, применяется сразу"); };
+
+/* ---------- образцы ---------- */
+async function loadRefs() {
+  const refs = await api("/api/refs").catch(() => []);
+  $("#refs").innerHTML = refs.length ? refs.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td><audio controls preload="none" src="/api/refs/${encodeURIComponent(r.name)}.wav"></audio></td><td>${esc(r.text) || '<span class="err">нет расшифровки</span>'}</td><td><button class="ghost danger" data-del="${esc(r.name)}">Удалить</button></td></tr>`).join("") : '<tr><td colspan="4" class="muted">Образцов нет. Они создаются при установке (./install.sh) через Silero.</td></tr>';
+  $$("[data-del]").forEach((b) => (b.onclick = async () => { if (confirm("Удалить образец " + b.dataset.del + "?")) { await api(`/api/refs/${b.dataset.del}`, { method: "DELETE" }); loadRefs(); } }));
+}
+$("#refForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const fd = new FormData($("#refForm"));
+  try {
+    const r = await fetch("/api/refs", { method: "POST", body: fd });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    $("#refForm").reset(); toast("Образец добавлен"); loadRefs();
+  } catch (err) { alert(err.message); }
+};
+
+(async function init() {
+  [CFG, MODELS] = await Promise.all([api("/api/config"), api("/api/models")]);
+  renderModels(); renderLan(); await refresh(); selectLog("worker"); loadDict(); loadRefs();
+  setInterval(refresh, 3000);
+})();
+</script>
+</body>
+</html>

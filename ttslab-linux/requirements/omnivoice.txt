@@ -1,0 +1,3 @@
+-r base.txt
+omnivoice>=0.2.1
+silero-stress>=1.5

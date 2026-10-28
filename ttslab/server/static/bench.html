@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTS Lab — скорость</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .progress { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  @media (prefers-reduced-motion: reduce) { .progress > div { transition: none; } }
+  .chart { position: relative; display: grid; gap: 6px; }
+  .bar-row { display: grid; grid-template-columns: minmax(140px, 230px) 1fr; gap: 12px; align-items: center; font-size: 14px; padding: 2px 0; border-radius: 4px; }
+  .bar-row:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .bar-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { position: relative; height: 22px; display: flex; align-items: center; gap: 8px; }
+  .bar { height: 14px; background: var(--accent); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .bar-val { font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .bar-row.na .bar-val { font-style: italic; }
+  .axis { display: grid; grid-template-columns: minmax(140px, 230px) 1fr; gap: 12px; font-size: 12px; color: var(--muted); }
+  .axis > div:last-child { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 4px; }
+  .tip { position: fixed; pointer-events: none; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.12); z-index: 30; max-width: 280px; }
+  .tip b { display: block; margin-bottom: 4px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-s); overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+  .models-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 16px; }
+  .models-pick .check { align-items: flex-start; }
+  .models-pick .check input { margin-top: 3px; }
+  .models-pick .check small { color: var(--muted); display: block; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>TTS Lab <span>скорость ответа</span></h1>
+  <span class="pill" id="statusPill"><span class="dot"></span><span>…</span></span>
+  <nav class="nav"><a href="/">Тест</a><a href="/bench" aria-current="page">Скорость</a><a href="/admin">Управление</a></nav>
+</header>
+
+<div class="wrap">
+  <section>
+    <div class="section-head"><h2>Новый замер</h2></div>
+    <div class="readout stack">
+      <p class="hint">Модели запускаются по очереди: на машине всегда работает одна. Для каждой меряется загрузка, первый запрос после загрузки и серия фраз. Запросы идут прямо в API модели с сохранёнными «настройками для API» — так же, как у боевых клиентов. Если веса ещё не скачаны, время загрузки включит скачивание.</p>
+      <div>
+        <div class="row" style="margin-bottom:6px"><b>Модели</b><button type="button" class="ghost" id="pickAll">все установленные</button><button type="button" class="ghost" id="pickNone">снять</button></div>
+        <div class="models-pick" id="modelPick"></div>
+      </div>
+      <div class="grid2">
+        <div>
+          <b>Фразы</b>
+          <div class="stack" id="setPick" style="margin-top:6px"></div>
+        </div>
+        <div class="stack">
+          <label class="field" for="repeats"><span><b>Повторов каждой фразы</b></span><input type="number" id="repeats" min="1" max="20" value="3"></label>
+          <label class="check"><input type="checkbox" id="restore" checked> вернуть модель, которая работала до замера</label>
+          <label class="field" for="timeout"><span><b>Ждать загрузку модели не дольше, мин</b></span><input type="number" id="timeout" min="1" max="240" value="30"></label>
+        </div>
+      </div>
+      <div class="row">
+        <button class="primary large" id="start">Начать замер</button>
+        <button id="stop" class="danger" hidden>Остановить</button>
+        <small class="muted" id="estimate"></small>
+      </div>
+      <div id="live" hidden class="stack">
+        <div class="progress" role="progressbar" aria-label="Ход замера"><div id="bar"></div></div>
+        <small id="current" class="muted"></small>
+        <div class="log" id="log" style="height:180px"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Результаты</h2>
+      <select id="runPick" aria-label="Замер" style="width:auto"></select>
+      <a class="btn" id="csv" href="#">Скачать CSV</a>
+      <button class="ghost danger" id="delRun">Удалить замер</button>
+    </div>
+    <p class="hint" id="sysInfo"></p>
+    <div id="results" class="stack"><div class="empty">Замеров пока нет. Выберите модели выше и нажмите «Начать замер».</div></div>
+  </section>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script src="/static/common.js"></script>
+<script>
+let MODELS = [], SETS = {}, RUN = null, metric = "median", setKey = "short";
+const METRICS = {
+  median: { label: "Ответ, медиана", unit: "с", get: (s) => s[`${setKey}_median`], perSet: true, hint: "От отправки запроса до получения всего аудио" },
+  p90: { label: "Ответ, p90", unit: "с", get: (s) => s[`${setKey}_p90`], perSet: true, hint: "90% ответов быстрее этого" },
+  rtf: { label: "RTF", unit: "", get: (s) => s.rtf_median, hint: "Время синтеза ÷ длительность аудио. Меньше 1 — быстрее реального времени" },
+  first: { label: "Первый запрос", unit: "с", get: (s) => s.first_s, hint: "Первый ответ сразу после загрузки модели" },
+  load: { label: "Загрузка", unit: "с", get: (s) => s.load_s, hint: "От команды запуска до готовности, включая прогрев" },
+  cps: { label: "Символов в секунду", unit: "", get: (s) => s.chars_per_s, hint: "Сколько символов текста модель озвучивает за секунду синтеза. Больше — лучше", higher: true },
+};
+
+function fmt(v, unit) {
+  if (v == null) return "—";
+  const n = v >= 100 ? Math.round(v) : v >= 0.1 ? Math.round(v * 100) / 100 : Math.round(v * 1000) / 1000;
+  return `${n}${unit ? " " + unit : ""}`;
+}
+
+function renderPickers() {
+  const saved = store.get("bench.models", null);
+  $("#modelPick").innerHTML = MODELS.map((m) => {
+    const ok = m.installed.env;
+    const on = ok && (saved ? saved.includes(m.id) : m.id !== "test-tone" && m.installed.weights);
+    return `<label class="check"><input type="checkbox" value="${m.id}" ${on ? "checked" : ""} ${ok ? "" : "disabled"}><span>${esc(m.title)}${ok ? (m.installed.weights ? "" : "<small>веса скачаются при запуске</small>") : "<small>не установлена</small>"}</span></label>`;
+  }).join("");
+  const sets = store.get("bench.sets", ["short", "medium"]);
+  $("#setPick").innerHTML = Object.entries(SETS).map(([k, v]) => `<label class="check" title="${esc(v.phrases.join("\n\n"))}"><input type="checkbox" value="${k}" ${sets.includes(k) ? "checked" : ""}> ${v.title}: ${v.phrases.length} шт., ${Math.min(...v.chars)}–${Math.max(...v.chars)} символов</label>`).join("");
+  $("#repeats").value = store.get("bench.repeats", 3);
+  $$("#modelPick input, #setPick input, #repeats").forEach((el) => el.addEventListener("change", estimate));
+  estimate();
+}
+function picked() { return $$("#modelPick input:checked").map((i) => i.value); }
+function pickedSets() { return $$("#setPick input:checked").map((i) => i.value); }
+function estimate() {
+  const n = picked().length, reps = +$("#repeats").value || 1;
+  const per = pickedSets().reduce((a, k) => a + SETS[k].phrases.length, 0) * reps + 1;
+  $("#estimate").textContent = n ? `${n} мод. × ${per} запросов = ${n * per} запросов плюс загрузка каждой модели` : "Выберите модели";
+}
+$("#pickAll").onclick = () => { $$("#modelPick input:not(:disabled)").forEach((i) => (i.checked = i.value !== "test-tone")); estimate(); };
+$("#pickNone").onclick = () => { $$("#modelPick input").forEach((i) => (i.checked = false)); estimate(); };
+
+$("#start").onclick = async () => {
+  const models = picked(), sets = pickedSets();
+  if (!models.length) return toast("Выберите модели");
+  if (!sets.length) return toast("Выберите фразы");
+  store.set("bench.models", models); store.set("bench.sets", sets); store.set("bench.repeats", +$("#repeats").value);
+  const load = Object.fromEntries(models.map((id) => [id, store.get("load." + id, {}) || {}]));
+  try {
+    await api("/api/bench/start", { json: { models, sets, repeats: +$("#repeats").value, restore: $("#restore").checked, timeout: (+$("#timeout").value || 30) * 60, load_options: load } });
+    toast("Замер начался"); poll();
+  } catch (e) { alert(e.message); }
+};
+$("#stop").onclick = async () => { await api("/api/bench/stop", { method: "POST" }); toast("Останавливаю после текущего запроса"); };
+
+let pollTimer;
+async function poll() {
+  clearTimeout(pollTimer);
+  const s = await api("/api/bench/status").catch(() => ({}));
+  const running = !!s.running;
+  $("#live").hidden = !s.id;
+  $("#start").disabled = running; $("#stop").hidden = !running;
+  if (s.id) {
+    const p = s.progress || { done: 0, total: 1 };
+    $("#bar").style.width = Math.min(100, (100 * p.done) / Math.max(1, p.total)) + "%";
+    $("#current").textContent = running ? `${s.current || "…"} — ${p.done} из ${p.total}` : `Замер ${s.status === "done" ? "завершён" : s.status}`;
+    $("#log").textContent = (s.log || []).join("\n");
+    $("#log").scrollTop = $("#log").scrollHeight;
+    if (RUN?.id === s.id || running) { RUN = { ...(RUN || {}), id: s.id, summary: s.summary }; if ($("#runPick").value !== s.id) await loadRuns(s.id); else renderResults(); }
+  }
+  if (running) pollTimer = setTimeout(poll, 2000); else if (s.id) loadRuns($("#runPick").value || s.id);
+}
+
+async function loadRuns(select) {
+  const runs = await api("/api/bench/runs").catch(() => []);
+  $("#runPick").innerHTML = runs.map((r) => `<option value="${r.id}">${esc(r.started)} — ${r.models.length} мод., ${esc(r.status)}</option>`).join("");
+  $("#runPick").hidden = $("#csv").hidden = $("#delRun").hidden = !runs.length;
+  if (!runs.length) return;
+  const id = select && runs.some((r) => r.id === select) ? select : runs[0].id;
+  $("#runPick").value = id;
+  RUN = await api(`/api/bench/runs/${id}`);
+  renderResults();
+}
+$("#runPick").onchange = () => loadRuns($("#runPick").value);
+$("#delRun").onclick = async () => { if (confirm("Удалить этот замер?")) { await api(`/api/bench/runs/${$("#runPick").value}`, { method: "DELETE" }); RUN = null; $("#results").innerHTML = '<div class="empty">Замер удалён.</div>'; loadRuns(); } };
+
+function renderResults() {
+  if (!RUN?.summary) return;
+  $("#csv").href = `/api/bench/runs/${RUN.id}/csv`;
+  const sys = RUN.system || {};
+  $("#sysInfo").textContent = [sys.cpu, sys.ram_gb ? `${sys.ram_gb} ГБ ОЗУ` : "", sys.gpu ? `GPU: ${sys.gpu}` : "", sys.os, RUN.repeats ? `повторов: ${RUN.repeats}` : ""].filter(Boolean).join(", ");
+  const S = RUN.summary;
+  const m = METRICS[metric];
+  const availableSets = (RUN.sets || ["short"]);
+  if (!availableSets.includes(setKey)) setKey = availableSets[0];
+  const rows = S.map((s) => ({ s, v: m.get(s) })).sort((a, b) => (a.v == null) - (b.v == null) || (m.higher ? b.v - a.v : a.v - b.v));
+  const max = Math.max(1e-6, ...rows.map((r) => r.v || 0));
+  const best = rows.find((r) => r.v != null);
+  $("#results").innerHTML = `
+    <div class="readout stack">
+      <div class="row">
+        <span class="seg" role="group" aria-label="Показатель">${Object.entries(METRICS).map(([k, x]) => `<button type="button" data-metric="${k}" aria-pressed="${k === metric}">${x.label}</button>`).join("")}</span>
+        ${m.perSet ? `<span class="seg" role="group" aria-label="Длина фраз">${availableSets.map((k) => `<button type="button" data-set="${k}" aria-pressed="${k === setKey}">${SETS[k]?.title || k}</button>`).join("")}</span>` : ""}
+      </div>
+      <h3>${m.label}${m.perSet ? ", " + (SETS[setKey]?.title || setKey) + " фразы" : ""}${m.unit ? `, ${m.unit}` : ""} — ${m.higher ? "больше" : "меньше"} лучше</h3>
+      <small class="hint">${m.hint}${best ? `. Лучшая: ${esc(best.s.title)} — ${fmt(best.v, m.unit)}` : ""}</small>
+      <div class="chart" id="chart">
+        ${rows.map((r, i) => `<div class="bar-row ${r.v == null ? "na" : ""}" data-i="${S.indexOf(r.s)}"><span class="name">${esc(r.s.title)}</span><span class="bar-track">${r.v == null ? "" : `<span class="bar" style="width:${Math.max(0.5, (r.v / max) * 88)}%"></span>`}<span class="bar-val">${r.v == null ? (r.s.error ? "ошибка" : "нет данных") : fmt(r.v, m.unit)}</span></span></div>`).join("")}
+        <div class="axis"><div></div><div><span>0</span><span>${fmt(max / 0.88, m.unit)}</span></div></div>
+      </div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Модель</th><th>Устройство</th><th class="num">Загрузка</th><th class="num">Первый</th><th class="num">Короткие</th><th class="num">Средние</th><th class="num">Длинные</th><th class="num">p90</th><th class="num">RTF</th><th class="num">Симв/с</th><th class="num">Накладные</th><th>Память</th></tr></thead>
+      <tbody>${S.map((s) => `<tr><td><b>${esc(s.title)}</b>${s.error ? `<div class="err">${esc(String(s.error).slice(0, 300))}</div>` : ""}${s.errors ? `<div class="err">ошибок: ${s.errors}</div>` : ""}</td>
+        <td>${esc(s.device || "—")}</td><td class="num" title="веса ${fmt(s.weights_s, "с")}, прогрев ${fmt(s.warmup_s, "с")}">${fmt(s.load_s, "с")}</td><td class="num">${fmt(s.first_s, "с")}</td>
+        <td class="num">${fmt(s.short_median, "с")}</td><td class="num">${fmt(s.medium_median, "с")}</td><td class="num">${fmt(s.long_median, "с")}</td>
+        <td class="num">${fmt(s.p90, "с")}</td><td class="num">${fmt(s.rtf_median)}</td><td class="num">${fmt(s.chars_per_s)}</td>
+        <td class="num" title="нормализация, очередь, кодирование, сеть">${fmt(s.overhead_median, "с")}</td><td>${memText(s.memory)}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <small class="hint">Короткие/средние/длинные — медиана полного ответа. «Накладные» — всё, кроме самой нейросети: нормализация текста, очередь, кодирование, сеть. Наведите на «Загрузку», чтобы увидеть веса и прогрев отдельно.</small>
+    <details class="group"><summary>Все запросы (${RUN.results?.length || 0})</summary>
+      <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Модель</th><th>Фраза</th><th class="num">Символов</th><th class="num">Ответ</th><th class="num">Синтез</th><th class="num">Первый кусок</th><th class="num">Норм.</th><th class="num">Код.</th><th class="num">Аудио</th><th class="num">RTF</th></tr></thead>
+      <tbody>${(RUN.results || []).map((r) => `<tr><td>${esc(MODELS.find((x) => x.id === r.model)?.title || r.model)}</td><td>${r.first ? "первый запрос" : `${SETS[r.set]?.title || r.set} ${r.phrase + 1}, повтор ${r.rep + 1}`}</td><td class="num">${r.chars}</td>
+        ${r.ok ? `<td class="num">${fmt(r.total, "с")}</td><td class="num">${fmt(r.synth, "с")}</td><td class="num">${fmt(r.first_chunk, "с")}</td><td class="num">${fmt(r.normalize, "с")}</td><td class="num">${fmt(r.encode, "с")}</td><td class="num">${fmt(r.audio_s, "с")}</td><td class="num">${fmt(r.rtf)}</td>` : `<td colspan="7" class="err">${esc(r.error)}</td>`}</tr>`).join("")}</tbody></table></div>
+    </details>`;
+  $$("[data-metric]").forEach((b) => (b.onclick = () => { metric = b.dataset.metric; renderResults(); }));
+  $$("[data-set]").forEach((b) => (b.onclick = () => { setKey = b.dataset.set; renderResults(); }));
+  const tip = $("#tip");
+  $$(".bar-row").forEach((row) => {
+    const s = S[+row.dataset.i];
+    row.onmousemove = (e) => {
+      tip.hidden = false;
+      tip.innerHTML = `<b>${esc(s.title)}</b>Короткие: ${fmt(s.short_median, "с")}<br>Средние: ${fmt(s.medium_median, "с")}<br>Длинные: ${fmt(s.long_median, "с")}<br>RTF: ${fmt(s.rtf_median)} · первый: ${fmt(s.first_s, "с")}<br>Загрузка: ${fmt(s.load_s, "с")}`;
+      tip.style.left = Math.min(e.clientX + 14, innerWidth - 300) + "px"; tip.style.top = e.clientY + 14 + "px";
+    };
+    row.onmouseleave = () => (tip.hidden = true);
+  });
+}
+function memText(m) {
+  if (!m) return "—";
+  const parts = [];
+  if (m.cuda_peak_mb) parts.push(`GPU ${(m.cuda_peak_mb / 1024).toFixed(1)} ГБ`);
+  if (m.mlx_peak_mb) parts.push(`MLX ${(m.mlx_peak_mb / 1024).toFixed(1)} ГБ`);
+  if (m.rss_peak_mb) parts.push(`ОЗУ ${(m.rss_peak_mb / 1024).toFixed(1)} ГБ`);
+  return parts.join(", ") || "—";
+}
+
+async function pollStatus() {
+  try {
+    const st0 = await api("/api/status"), st = st0.state || {}, w = st0.worker || {};
+    const s = st.running ? (w.status || "starting") : "stopped";
+    $("#statusPill").innerHTML = `<span class="dot ${s}"></span><span>${st.running ? esc(st.title) + " — " + (STATUS_RU[s] || s) : "модель не запущена"}${st0.bench ? " · идёт замер" : ""}</span>`;
+  } catch {}
+}
+
+(async function init() {
+  [MODELS, SETS] = await Promise.all([api("/api/models"), api("/api/bench/phrases").then((r) => r.sets)]);
+  renderPickers();
+  await loadRuns();
+  poll(); pollStatus(); setInterval(pollStatus, 4000);
+})();
+</script>
+</body>
+</html>

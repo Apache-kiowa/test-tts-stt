@@ -1,0 +1,4 @@
+-r base.txt
+mlx-audio[tts]>=0.6.2
+torch>=2.4
+silero-stress>=1.5

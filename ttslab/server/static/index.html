@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTS Lab — прослушивание</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <h1>TTS Lab <span>прослушивание голосов</span></h1>
+  <span class="pill" id="statusPill"><span class="dot"></span><span>проверяю модель…</span></span>
+  <nav class="nav"><a href="/" aria-current="page">Тест</a><a href="/bench">Скорость</a><a href="/admin">Управление</a></nav>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <section>
+      <h2>Подключение</h2>
+      <div class="stack">
+        <div class="row" role="radiogroup" aria-label="Куда отправлять запрос">
+          <label class="check"><input type="radio" name="mode" value="litellm" checked> через LiteLLM</label>
+          <label class="check"><input type="radio" name="mode" value="direct"> напрямую в Мак</label>
+        </div>
+        <div id="litellmFields" class="stack">
+          <label class="field" for="baseUrl"><span><b>Адрес LiteLLM</b></span><input type="url" id="baseUrl" placeholder="http://litellm.edu.ingacademy.ru"></label>
+          <label class="field" for="apiKey"><span><b>Ключ LiteLLM</b><button type="button" class="ghost" id="toggleKey">показать</button></span>
+            <input type="password" id="apiKey" autocomplete="off" placeholder="sk-…"></label>
+          <label class="field" for="llmModel"><span><b>Имя модели в LiteLLM</b></span><input type="text" id="llmModel" placeholder="mac-tts"></label>
+          <div class="row"><button type="button" id="checkKey">Проверить ключ</button><small id="checkResult" class="muted"></small></div>
+        </div>
+        <details class="group">
+          <summary>Как передавать настройки</summary>
+          <div class="stack">
+            <label class="field" for="transport"><span><b>Канал</b></span>
+              <select id="transport">
+                <option value="instructions">в поле instructions (JSON) — работает через LiteLLM</option>
+                <option value="body">отдельным полем settings</option>
+                <option value="both">оба способа</option>
+                <option value="none">не передавать (будут настройки «для API»)</option>
+              </select></label>
+            <label class="field" for="format"><span><b>Формат ответа</b></span>
+              <select id="format"><option value="wav">wav</option><option value="mp3">mp3 (нужен ffmpeg на Маке)</option><option value="opus">opus</option></select></label>
+            <small class="hint">Ключ хранится только в этом браузере. Запрос идёт через панель на Маке, поэтому CORS у LiteLLM настраивать не нужно.</small>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Настройки модели</h2>
+      </div>
+      <div class="stack">
+        <label class="field" for="schemaModel"><span><b>Модель</b><small id="schemaNote"></small></span><select id="schemaModel"></select></label>
+        <p class="hint" id="modelSummary"></p>
+        <details class="group" open><summary>Голос и синтез</summary><div class="stack" id="fieldsModel"></div></details>
+        <details class="group"><summary>Текст и произношение</summary><div class="stack" id="fieldsText"></div></details>
+        <div class="row">
+          <button type="button" id="resetSettings">Сбросить</button>
+          <button type="button" id="saveDefaults" title="Эти настройки получат запросы без настроек, например из Wordtrip">Сохранить для API</button>
+        </div>
+        <small class="hint" id="defaultsNote"></small>
+      </div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <section>
+      <div class="section-head">
+        <h2>Текст</h2>
+        <select id="phrasePick" aria-label="Подставить фразу из набора" style="width:auto"><option value="">Подставить фразу из набора…</option></select>
+      </div>
+      <textarea id="text" class="big" placeholder="Вставьте текст, который нужно озвучить"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="primary large" id="speak">Озвучить</button>
+        <button id="runSet">Прогнать весь набор</button>
+        <small class="muted">Ctrl + Enter — озвучить</small>
+      </div>
+    </section>
+
+    <section>
+      <h2>Что прочитает модель</h2>
+      <div class="readout" aria-live="polite">
+        <p id="preview" class="muted">Начните печатать — здесь появится текст после нормализации. Подсвечено то, что изменилось.</p>
+        <small class="hint" id="previewStress"></small>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Дубли</h2>
+        <label class="check"><input type="checkbox" id="onlyThis"> только эта модель</label>
+      </div>
+      <div class="takes" id="takes"><div class="empty">Озвучьте фразу — дубль появится здесь. Оценивайте звёздами и отмечайте проблемы.</div></div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Сравнение моделей</h2>
+        <button type="button" id="refreshSummary">Обновить</button>
+        <a class="btn" href="/api/ratings.csv">Скачать CSV</a>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Модель</th><th class="num">Средняя оценка</th><th class="num">Оценено / дублей</th><th class="num">RTF</th><th class="num">Задержка</th><th>Частые проблемы</th></tr></thead>
+        <tbody id="summary"><tr><td colspan="6" class="muted">Пока нет оценок</td></tr></tbody>
+      </table></div>
+      <small class="hint">RTF — время синтеза делить на длину аудио: меньше 1 значит быстрее реального времени.</small>
+    </section>
+  </main>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+const PHRASES = [
+  "Записываю вас на 17:00, врач Дорохов С. А. Верно?",
+  "Свободное время на завтра: 09:00, 10:30 и 14:05.",
+  "Терапевт Кузнецова Е.В. принимает в кабинете № 204.",
+  "Приём 05.11.2026 в 8:00, стоимость консультации 1500 руб.",
+  "Если планы изменятся, перезвоните нам по номеру +7 (495) 123-45-07.",
+  "Доктор Иванов И. И. сейчас в отпуске. Могу предложить врача Петрову А. С. на 12:30.",
+  "Вы записаны к стоматологу на четверг, 12 ноября, в 11:20. Возьмите с собой паспорт и полис ОМС.",
+  "Здравствуйте! Клиника «Здоровье», меня зовут Ксения. Чем могу помочь?",
+  "Анализы сдаются натощак, с 07:30 до 10:00, в процедурном кабинете на втором этаже.",
+  "Записываю: терапевт Кузнецова Елена Викторовна, понедельник, 16:45. Всё верно?",
+];
+const TAGS = ["нули/время", "инициалы", "числа", "ударение", "акцент", "интонация", "артефакты", "обрезано", "медленно"];
+
+let MODELS = [], REFS = [], STATUS = null, current = null;
+
+function mode() { return $("input[name=mode]:checked").value; }
+
+function loadConn() {
+  $("#baseUrl").value = store.get("baseUrl", "");
+  $("#apiKey").value = store.get("apiKey", "");
+  $("#llmModel").value = store.get("llmModel", "");
+  $("#transport").value = store.get("transport", "instructions");
+  $("#format").value = store.get("format", "wav");
+  const m = store.get("mode", "litellm");
+  $$("input[name=mode]").forEach((r) => (r.checked = r.value === m));
+  $("#litellmFields").hidden = m !== "litellm";
+}
+function saveConn() {
+  store.set("baseUrl", $("#baseUrl").value.trim());
+  store.set("apiKey", $("#apiKey").value.trim());
+  store.set("llmModel", $("#llmModel").value.trim());
+  store.set("transport", $("#transport").value);
+  store.set("format", $("#format").value);
+  store.set("mode", mode());
+  $("#litellmFields").hidden = mode() !== "litellm";
+}
+["baseUrl", "apiKey", "llmModel", "transport", "format"].forEach((id) => $("#" + id).addEventListener("change", saveConn));
+$$("input[name=mode]").forEach((r) => r.addEventListener("change", saveConn));
+$("#toggleKey").onclick = () => {
+  const k = $("#apiKey"); k.type = k.type === "password" ? "text" : "password";
+  $("#toggleKey").textContent = k.type === "password" ? "показать" : "скрыть";
+};
+$("#checkKey").onclick = async () => {
+  saveConn();
+  $("#checkResult").textContent = "проверяю…";
+  try {
+    const r = await api("/api/litellm-check", { json: { base_url: $("#baseUrl").value.trim(), api_key: $("#apiKey").value.trim(), model: $("#llmModel").value.trim() } });
+    $("#checkResult").textContent = r.found ? `ключ работает, модель «${r.want}» есть` : `ключ работает, но модели «${r.want}» нет. Есть: ${r.models.slice(0, 8).join(", ")}${r.models.length > 8 ? "…" : ""}`;
+  } catch (e) { $("#checkResult").textContent = e.message; }
+};
+
+/* ---------- настройки ---------- */
+function settingsKey(id) { return "settings." + id; }
+function currentSpec() { return MODELS.find((m) => m.id === $("#schemaModel").value); }
+
+function renderSettings() {
+  const spec = currentSpec();
+  if (!spec) return;
+  const saved = store.get(settingsKey(spec.id), null);
+  const base = Object.fromEntries([...spec.settings, ...spec.common].map((f) => [f.key, f.default]));
+  const vals = { ...base, ...(spec.saved_defaults || {}), ...(saved || {}) };
+  $("#fieldsModel").innerHTML = spec.settings.map((f) => fieldHtml(f, vals[f.key], REFS)).join("") || '<small class="hint">У этой модели нет своих настроек</small>';
+  $("#fieldsText").innerHTML = spec.common.map((f) => fieldHtml(f, vals[f.key], REFS)).join("");
+  $("#modelSummary").textContent = `${spec.summary} Лицензия: ${spec.license}.`;
+  const sd = spec.saved_defaults && Object.keys(spec.saved_defaults).length;
+  $("#defaultsNote").textContent = sd ? "Для этой модели сохранены настройки для API." : "Запросы без настроек получат значения по умолчанию.";
+  $$("#fieldsModel [data-key], #fieldsText [data-key]").forEach((el) => el.addEventListener("change", () => { persistSettings(); schedulePreview(); }));
+  schedulePreview();
+}
+function readSettings() { return { ...readFields($("#fieldsModel")), ...readFields($("#fieldsText")) }; }
+function persistSettings() { const s = currentSpec(); if (s) store.set(settingsKey(s.id), readSettings()); }
+
+$("#schemaModel").addEventListener("change", () => { store.set("schemaModel", $("#schemaModel").value); renderSettings(); renderTakesFilter(); });
+$("#resetSettings").onclick = () => { const s = currentSpec(); store.set(settingsKey(s.id), null); s.saved_defaults = {}; renderSettings(); toast("Настройки сброшены"); };
+$("#saveDefaults").onclick = async () => {
+  const s = currentSpec();
+  try {
+    const r = await api(`/api/defaults/${s.id}`, { method: "PUT", json: readSettings() });
+    s.saved_defaults = r.saved;
+    $("#defaultsNote").textContent = "Сохранено: эти настройки получат запросы без настроек (например, из Wordtrip).";
+    toast("Сохранено для API");
+  } catch (e) { toast(e.message); }
+};
+
+/* ---------- превью нормализации ---------- */
+let previewTimer;
+function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(preview, 350); }
+async function preview() {
+  const text = $("#text").value;
+  store.set("text", text);
+  if (!text.trim()) { $("#preview").innerHTML = "Начните печатать — здесь появится текст после нормализации. Подсвечено то, что изменилось."; $("#preview").className = "muted"; return; }
+  try {
+    const r = await api("/api/normalize", { json: { input: text, settings: readSettings(), model: $("#schemaModel").value } });
+    $("#preview").className = "";
+    $("#preview").innerHTML = highlightChanges(text, r.normalized);
+    $("#previewStress").textContent = r.stressed ? "С ударениями: " + r.stressed : "";
+  } catch (e) { $("#preview").textContent = e.message; }
+}
+$("#text").addEventListener("input", schedulePreview);
+$("#text").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") speak(); });
+PHRASES.forEach((p) => $("#phrasePick").insertAdjacentHTML("beforeend", `<option>${esc(p)}</option>`));
+$("#phrasePick").onchange = () => { if ($("#phrasePick").value) { $("#text").value = $("#phrasePick").value; $("#phrasePick").value = ""; schedulePreview(); } };
+
+/* ---------- синтез ---------- */
+function requestBody(text) {
+  return {
+    mode: mode(), base_url: $("#baseUrl").value.trim(), api_key: $("#apiKey").value.trim(),
+    model: $("#llmModel").value.trim() || undefined, input: text, settings: readSettings(),
+    transport: $("#transport").value, response_format: $("#format").value,
+  };
+}
+
+async function synth(text) {
+  const card = newTakeCard({ input: text, model: STATUS?.state?.model || $("#schemaModel").value, ts: new Date().toLocaleTimeString("ru") }, true);
+  try {
+    const r = await fetch("/api/speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody(text)) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error((j.error || `HTTP ${r.status}`) + (j.detail ? "\n" + j.detail : ""));
+    }
+    const blob = await r.blob();
+    const meta = {
+      id: r.headers.get("x-output-id"), model: r.headers.get("x-tts-model") || STATUS?.state?.model, input: text,
+      normalized: decodeURIComponent(r.headers.get("x-normalized-text") || ""),
+      gen_time: parseFloat(r.headers.get("x-gen-time")) || null, audio_s: parseFloat(r.headers.get("x-audio-duration")) || null,
+      latency: parseFloat(r.headers.get("x-latency")) || null, ts: new Date().toLocaleTimeString("ru"), settings: readSettings(),
+      timing: (() => { try { return JSON.parse(r.headers.get("x-timing") || "null"); } catch { return null; } })(),
+    };
+    fillTake(card, meta, blob);
+    loadSummary();
+    return true;
+  } catch (e) {
+    card.classList.remove("pending"); card.classList.add("failed");
+    $(".body", card).innerHTML = `<p class="err">${esc(e.message)}</p>`;
+    return false;
+  }
+}
+
+async function speak() {
+  const text = $("#text").value.trim();
+  if (!text) { $("#text").focus(); return; }
+  persistSettings(); saveConn();
+  $("#speak").disabled = true;
+  await synth(text);
+  $("#speak").disabled = false;
+}
+$("#speak").onclick = speak;
+$("#runSet").onclick = async () => {
+  persistSettings(); saveConn();
+  $("#runSet").disabled = true;
+  for (const [i, p] of PHRASES.entries()) {
+    $("#runSet").textContent = `Набор: ${i + 1} из ${PHRASES.length}`;
+    await synth(p);
+  }
+  $("#runSet").textContent = "Прогнать весь набор"; $("#runSet").disabled = false;
+};
+
+/* ---------- дубли ---------- */
+function modelTitle(id) { return MODELS.find((m) => m.id === id)?.title || id || "модель"; }
+
+function newTakeCard(meta, pending) {
+  const box = $("#takes");
+  $(".empty", box)?.remove();
+  const el = document.createElement("article");
+  el.className = "take" + (pending ? " pending" : "");
+  el.dataset.model = meta.model || "";
+  el.innerHTML = `<div class="take-head"><strong>${esc(modelTitle(meta.model))}</strong><span>${esc(meta.ts || "")}</span><span class="metrics">${pending ? "синтезирую…" : ""}</span></div><div class="body"><dl class="lines"><dt>Текст</dt><dd>${esc(meta.input)}</dd></dl></div>`;
+  box.prepend(el);
+  return el;
+}
+
+function fillTake(el, meta, blob) {
+  el.classList.remove("pending");
+  el.dataset.id = meta.id || "";
+  el.dataset.model = meta.model || "";
+  $("strong", el).textContent = modelTitle(meta.model);
+  const t = meta.timing;
+  const tTitle = t ? `нормализация ${fmtSec(t.normalize)}, очередь ${fmtSec(t.queue)}, нейросеть ${fmtSec(t.synth)} (первый кусок ${fmtSec(t.first_chunk)}), кодирование ${fmtSec(t.encode)}` : "время синтеза";
+  $(".metrics", el).innerHTML = `<span title="${esc(tTitle)}">синтез ${fmtSec(meta.gen_time)}</span><span>аудио ${fmtSec(meta.audio_s)}</span><span title="от нажатия до ответа">задержка ${fmtSec(meta.latency)}</span>${meta.gen_time && meta.audio_s ? `<span title="время синтеза ÷ длительность аудио">RTF ${(meta.gen_time / meta.audio_s).toFixed(2)}</span>` : ""}`;
+  const url = URL.createObjectURL(blob);
+  const score = meta.score || 0, tags = meta.tags || [];
+  $(".body", el).innerHTML = `
+    <div class="player"><button class="play" aria-label="Слушать">▶</button><canvas class="wave" tabindex="0" aria-label="Волна, нажмите для перемотки"></canvas></div>
+    <audio preload="auto" src="${url}"></audio>
+    <dl class="lines"><dt>Текст</dt><dd>${esc(meta.input)}</dd>
+    <dt>Прочитано</dt><dd>${meta.normalized ? highlightChanges(meta.input, meta.normalized) : '<span class="muted">через LiteLLM текст после нормализации не возвращается — смотрите превью выше или логи на Маке</span>'}</dd></dl>
+    <div class="rate">
+      <span class="stars" role="radiogroup" aria-label="Оценка">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-n="${n}" class="${n <= score ? "on" : ""}" aria-label="${n} из 5">★</button>`).join("")}</span>
+      <span class="tags">${TAGS.map((t) => `<button type="button" class="tag" aria-pressed="${tags.includes(t)}">${t}</button>`).join("")}</span>
+      <input type="text" class="comment" placeholder="Комментарий" value="${esc(meta.comment || "")}">
+      <a class="btn ghost" href="${url}" download="${esc(meta.id || "take")}.wav">Скачать</a>
+      <button type="button" class="ghost danger del">Удалить</button>
+    </div>`;
+  const audio = $("audio", el), play = $(".play", el);
+  play.onclick = () => { $$("audio").forEach((a) => a !== audio && a.pause()); audio.paused ? audio.play() : audio.pause(); };
+  audio.onplay = () => (play.textContent = "❚❚");
+  audio.onpause = audio.onended = () => (play.textContent = "▶");
+  drawWave($("canvas", el), blob, audio);
+  const save = async () => {
+    if (!meta.id) return;
+    const s = $$(".stars .on", el).length || null;
+    const tg = $$(".tag[aria-pressed=true]", el).map((b) => b.textContent);
+    try { await api(`/api/outputs/${meta.id}/rate`, { json: { score: s, tags: tg, comment: $(".comment", el).value } }); loadSummary(); } catch (e) { toast(e.message); }
+  };
+  $$(".stars button", el).forEach((b) => (b.onclick = () => { const n = +b.dataset.n; $$(".stars button", el).forEach((x) => x.classList.toggle("on", +x.dataset.n <= n)); save(); toast(`Оценка ${n}`); }));
+  $$(".tag", el).forEach((b) => (b.onclick = () => { b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true"); save(); }));
+  $(".comment", el).addEventListener("change", save);
+  $(".del", el).onclick = async () => { if (meta.id) await api(`/api/outputs/${meta.id}`, { method: "DELETE" }).catch(() => {}); el.remove(); loadSummary(); };
+  renderTakesFilter();
+}
+
+async function loadHistory() {
+  const list = await api("/api/outputs?limit=30").catch(() => []);
+  if (!list.length) return;
+  $("#takes").innerHTML = "";
+  for (const m of list.reverse()) {
+    const el = newTakeCard(m, true);
+    fetch(`/api/outputs/${m.id}/audio`).then((r) => r.blob()).then((b) => fillTake(el, m, b)).catch(() => el.remove());
+  }
+}
+function renderTakesFilter() {
+  const only = $("#onlyThis").checked, id = $("#schemaModel").value;
+  $$(".take").forEach((t) => (t.hidden = only && t.dataset.model !== id));
+}
+$("#onlyThis").onchange = renderTakesFilter;
+
+async function loadSummary() {
+  const rows = await api("/api/summary").catch(() => []);
+  $("#summary").innerHTML = rows.length ? rows.map((r) => `<tr><td>${esc(modelTitle(r.model))}</td><td class="num">${r.avg_score ?? "—"}</td><td class="num">${r.rated} / ${r.outputs}</td><td class="num">${r.rtf ?? "—"}</td><td class="num">${fmtSec(r.avg_latency)}</td><td>${Object.entries(r.issues).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${esc(k)} ${v}`).join(", ") || "—"}</td></tr>`).join("") : '<tr><td colspan="6" class="muted">Пока нет оценок</td></tr>';
+}
+$("#refreshSummary").onclick = loadSummary;
+
+/* ---------- статус ---------- */
+async function pollStatus() {
+  try {
+    STATUS = await api("/api/status");
+    const st = STATUS.state || {}, w = STATUS.worker || {};
+    const s = st.running ? (w.status || "starting") : "stopped";
+    $("#statusPill").innerHTML = `<span class="dot ${s}"></span><span>${st.running ? esc(st.title || st.model) + " — " + (STATUS_RU[s] || s) : "модель не запущена"}</span>`;
+    $("#statusPill").title = w.error || "";
+    if (st.running && st.model && !store.get("schemaModel", null) && $("#schemaModel").value !== st.model) {
+      $("#schemaModel").value = st.model; renderSettings();
+    }
+    const other = st.running && st.model && st.model !== $("#schemaModel").value;
+    $("#schemaNote").innerHTML = other ? `<button type="button" class="ghost" id="switchSchema">на Маке запущена ${esc(st.title)} — переключить</button>` : "";
+    if (other) $("#switchSchema").onclick = () => { $("#schemaModel").value = st.model; store.set("schemaModel", st.model); renderSettings(); renderTakesFilter(); pollStatus(); };
+  } catch {}
+}
+
+(async function init() {
+  loadConn();
+  const cfg = await api("/api/config").catch(() => ({}));
+  if (!$("#baseUrl").value) $("#baseUrl").value = cfg.litellm_url || "";
+  if (!$("#llmModel").value) $("#llmModel").value = cfg.litellm_model_name || "mac-tts";
+  [MODELS, REFS] = await Promise.all([api("/api/models"), api("/api/refs").catch(() => [])]);
+  $("#schemaModel").innerHTML = MODELS.map((m) => `<option value="${m.id}">${esc(m.title)}${m.installed.weights ? "" : " (не скачана)"}</option>`).join("");
+  await pollStatus();
+  const pick = store.get("schemaModel", null) || STATUS?.state?.model || MODELS[0].id;
+  $("#schemaModel").value = MODELS.some((m) => m.id === pick) ? pick : MODELS[0].id;
+  $("#text").value = store.get("text", PHRASES[0]);
+  renderSettings();
+  loadHistory(); loadSummary();
+  setInterval(pollStatus, 4000);
+})();
+</script>
+</body>
+</html>

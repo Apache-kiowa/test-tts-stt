@@ -1,0 +1,3 @@
+-r base.txt
+coqui-tts>=0.27
+silero-stress>=1.5

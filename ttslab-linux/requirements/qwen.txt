@@ -1,0 +1,3 @@
+-r base.txt
+qwen-tts>=0.1.1
+silero-stress>=1.5

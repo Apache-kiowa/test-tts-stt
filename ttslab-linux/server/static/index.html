@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTS Lab — прослушивание</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <h1>TTS Lab <span>прослушивание голосов</span></h1>
+  <span class="pill" id="statusPill"><span class="dot"></span><span>проверяю модель…</span></span>
+  <nav class="nav"><a href="/" aria-current="page">Тест</a><a href="/bench">Скорость</a><a href="/admin">Управление</a></nav>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <section>
+      <h2>API в локальной сети</h2>
+      <div class="stack">
+        <p class="hint">Другие программы в сети обращаются к модели так же, как к OpenAI. Нажмите на адрес, чтобы скопировать.</p>
+        <dl class="kv" id="apiInfo"><dt>Адрес</dt><dd>…</dd></dl>
+        <label class="field" for="format"><span><b>Формат ответа</b></span>
+          <select id="format"><option value="wav">wav</option><option value="mp3">mp3</option><option value="opus">opus</option></select></label>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Настройки модели</h2>
+      </div>
+      <div class="stack">
+        <label class="field" for="schemaModel"><span><b>Модель</b><small id="schemaNote"></small></span><select id="schemaModel"></select></label>
+        <p class="hint" id="modelSummary"></p>
+        <details class="group" open><summary>Голос и синтез</summary><div class="stack" id="fieldsModel"></div></details>
+        <details class="group"><summary>Текст и произношение</summary><div class="stack" id="fieldsText"></div></details>
+        <div class="row">
+          <button type="button" id="resetSettings">Сбросить</button>
+          <button type="button" id="saveDefaults" title="Эти настройки получат запросы без настроек, например из Wordtrip">Сохранить для API</button>
+        </div>
+        <small class="hint" id="defaultsNote"></small>
+      </div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <section>
+      <div class="section-head">
+        <h2>Текст</h2>
+        <select id="phrasePick" aria-label="Подставить фразу из набора" style="width:auto"><option value="">Подставить фразу из набора…</option></select>
+      </div>
+      <textarea id="text" class="big" placeholder="Вставьте текст, который нужно озвучить"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="primary large" id="speak">Озвучить</button>
+        <button id="runSet">Прогнать весь набор</button>
+        <small class="muted">Ctrl + Enter — озвучить</small>
+      </div>
+    </section>
+
+    <section>
+      <h2>Что прочитает модель</h2>
+      <div class="readout" aria-live="polite">
+        <p id="preview" class="muted">Начните печатать — здесь появится текст после нормализации. Подсвечено то, что изменилось.</p>
+        <small class="hint" id="previewStress"></small>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Дубли</h2>
+        <label class="check"><input type="checkbox" id="onlyThis"> только эта модель</label>
+      </div>
+      <div class="takes" id="takes"><div class="empty">Озвучьте фразу — дубль появится здесь. Оценивайте звёздами и отмечайте проблемы.</div></div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Сравнение моделей</h2>
+        <button type="button" id="refreshSummary">Обновить</button>
+        <a class="btn" href="/api/ratings.csv">Скачать CSV</a>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Модель</th><th class="num">Средняя оценка</th><th class="num">Оценено / дублей</th><th class="num">RTF</th><th class="num">Задержка</th><th>Частые проблемы</th></tr></thead>
+        <tbody id="summary"><tr><td colspan="6" class="muted">Пока нет оценок</td></tr></tbody>
+      </table></div>
+      <small class="hint">RTF — время синтеза делить на длину аудио: меньше 1 значит быстрее реального времени.</small>
+    </section>
+  </main>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+const PHRASES = [
+  "Записываю вас на 17:00, врач Дорохов С. А. Верно?",
+  "Свободное время на завтра: 09:00, 10:30 и 14:05.",
+  "Терапевт Кузнецова Е.В. принимает в кабинете № 204.",
+  "Приём 05.11.2026 в 8:00, стоимость консультации 1500 руб.",
+  "Если планы изменятся, перезвоните нам по номеру +7 (495) 123-45-07.",
+  "Доктор Иванов И. И. сейчас в отпуске. Могу предложить врача Петрову А. С. на 12:30.",
+  "Вы записаны к стоматологу на четверг, 12 ноября, в 11:20. Возьмите с собой паспорт и полис ОМС.",
+  "Здравствуйте! Клиника «Здоровье», меня зовут Ксения. Чем могу помочь?",
+  "Анализы сдаются натощак, с 07:30 до 10:00, в процедурном кабинете на втором этаже.",
+  "Записываю: терапевт Кузнецова Елена Викторовна, понедельник, 16:45. Всё верно?",
+];
+const TAGS = ["нули/время", "инициалы", "числа", "ударение", "акцент", "интонация", "артефакты", "обрезано", "медленно"];
+
+let MODELS = [], REFS = [], STATUS = null, current = null;
+
+function loadConn() { $("#format").value = store.get("format", "wav"); }
+function saveConn() { store.set("format", $("#format").value); }
+$("#format").addEventListener("change", saveConn);
+
+/* ---------- настройки ---------- */
+function settingsKey(id) { return "settings." + id; }
+function currentSpec() { return MODELS.find((m) => m.id === $("#schemaModel").value); }
+
+function renderSettings() {
+  const spec = currentSpec();
+  if (!spec) return;
+  const saved = store.get(settingsKey(spec.id), null);
+  const base = Object.fromEntries([...spec.settings, ...spec.common].map((f) => [f.key, f.default]));
+  const vals = { ...base, ...(spec.saved_defaults || {}), ...(saved || {}) };
+  $("#fieldsModel").innerHTML = spec.settings.map((f) => fieldHtml(f, vals[f.key], REFS)).join("") || '<small class="hint">У этой модели нет своих настроек</small>';
+  $("#fieldsText").innerHTML = spec.common.map((f) => fieldHtml(f, vals[f.key], REFS)).join("");
+  $("#modelSummary").textContent = `${spec.summary} Лицензия: ${spec.license}.`;
+  const sd = spec.saved_defaults && Object.keys(spec.saved_defaults).length;
+  $("#defaultsNote").textContent = sd ? "Для этой модели сохранены настройки для API." : "Запросы без настроек получат значения по умолчанию.";
+  $$("#fieldsModel [data-key], #fieldsText [data-key]").forEach((el) => el.addEventListener("change", () => { persistSettings(); schedulePreview(); }));
+  schedulePreview();
+}
+function readSettings() { return { ...readFields($("#fieldsModel")), ...readFields($("#fieldsText")) }; }
+function persistSettings() { const s = currentSpec(); if (s) store.set(settingsKey(s.id), readSettings()); }
+
+$("#schemaModel").addEventListener("change", () => { store.set("schemaModel", $("#schemaModel").value); renderSettings(); renderTakesFilter(); });
+$("#resetSettings").onclick = () => { const s = currentSpec(); store.set(settingsKey(s.id), null); s.saved_defaults = {}; renderSettings(); toast("Настройки сброшены"); };
+$("#saveDefaults").onclick = async () => {
+  const s = currentSpec();
+  try {
+    const r = await api(`/api/defaults/${s.id}`, { method: "PUT", json: readSettings() });
+    s.saved_defaults = r.saved;
+    $("#defaultsNote").textContent = "Сохранено: эти настройки получат запросы без настроек (например, из Wordtrip).";
+    toast("Сохранено для API");
+  } catch (e) { toast(e.message); }
+};
+
+/* ---------- превью нормализации ---------- */
+let previewTimer;
+function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(preview, 350); }
+async function preview() {
+  const text = $("#text").value;
+  store.set("text", text);
+  if (!text.trim()) { $("#preview").innerHTML = "Начните печатать — здесь появится текст после нормализации. Подсвечено то, что изменилось."; $("#preview").className = "muted"; return; }
+  try {
+    const r = await api("/api/normalize", { json: { input: text, settings: readSettings(), model: $("#schemaModel").value } });
+    $("#preview").className = "";
+    $("#preview").innerHTML = highlightChanges(text, r.normalized);
+    $("#previewStress").textContent = r.stressed ? "С ударениями: " + r.stressed : "";
+  } catch (e) { $("#preview").textContent = e.message; }
+}
+$("#text").addEventListener("input", schedulePreview);
+$("#text").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") speak(); });
+PHRASES.forEach((p) => $("#phrasePick").insertAdjacentHTML("beforeend", `<option>${esc(p)}</option>`));
+$("#phrasePick").onchange = () => { if ($("#phrasePick").value) { $("#text").value = $("#phrasePick").value; $("#phrasePick").value = ""; schedulePreview(); } };
+
+/* ---------- синтез ---------- */
+function requestBody(text) {
+  return { input: text, settings: readSettings(), response_format: $("#format").value };
+}
+
+async function synth(text) {
+  const card = newTakeCard({ input: text, model: STATUS?.state?.model || $("#schemaModel").value, ts: new Date().toLocaleTimeString("ru") }, true);
+  try {
+    const r = await fetch("/api/speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody(text)) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error((j.error || `HTTP ${r.status}`) + (j.detail ? "\n" + j.detail : ""));
+    }
+    const blob = await r.blob();
+    const meta = {
+      id: r.headers.get("x-output-id"), model: r.headers.get("x-tts-model") || STATUS?.state?.model, input: text,
+      normalized: decodeURIComponent(r.headers.get("x-normalized-text") || ""),
+      gen_time: parseFloat(r.headers.get("x-gen-time")) || null, audio_s: parseFloat(r.headers.get("x-audio-duration")) || null,
+      latency: parseFloat(r.headers.get("x-latency")) || null, ts: new Date().toLocaleTimeString("ru"), settings: readSettings(),
+      timing: (() => { try { return JSON.parse(r.headers.get("x-timing") || "null"); } catch { return null; } })(),
+    };
+    fillTake(card, meta, blob);
+    loadSummary();
+    return true;
+  } catch (e) {
+    card.classList.remove("pending"); card.classList.add("failed");
+    $(".body", card).innerHTML = `<p class="err">${esc(e.message)}</p>`;
+    return false;
+  }
+}
+
+async function speak() {
+  const text = $("#text").value.trim();
+  if (!text) { $("#text").focus(); return; }
+  persistSettings(); saveConn();
+  $("#speak").disabled = true;
+  await synth(text);
+  $("#speak").disabled = false;
+}
+$("#speak").onclick = speak;
+$("#runSet").onclick = async () => {
+  persistSettings(); saveConn();
+  $("#runSet").disabled = true;
+  for (const [i, p] of PHRASES.entries()) {
+    $("#runSet").textContent = `Набор: ${i + 1} из ${PHRASES.length}`;
+    await synth(p);
+  }
+  $("#runSet").textContent = "Прогнать весь набор"; $("#runSet").disabled = false;
+};
+
+/* ---------- дубли ---------- */
+function modelTitle(id) { return MODELS.find((m) => m.id === id)?.title || id || "модель"; }
+
+function newTakeCard(meta, pending) {
+  const box = $("#takes");
+  $(".empty", box)?.remove();
+  const el = document.createElement("article");
+  el.className = "take" + (pending ? " pending" : "");
+  el.dataset.model = meta.model || "";
+  el.innerHTML = `<div class="take-head"><strong>${esc(modelTitle(meta.model))}</strong><span>${esc(meta.ts || "")}</span><span class="metrics">${pending ? "синтезирую…" : ""}</span></div><div class="body"><dl class="lines"><dt>Текст</dt><dd>${esc(meta.input)}</dd></dl></div>`;
+  box.prepend(el);
+  return el;
+}
+
+function fillTake(el, meta, blob) {
+  el.classList.remove("pending");
+  el.dataset.id = meta.id || "";
+  el.dataset.model = meta.model || "";
+  $("strong", el).textContent = modelTitle(meta.model);
+  const t = meta.timing;
+  const tTitle = t ? `нормализация ${fmtSec(t.normalize)}, очередь ${fmtSec(t.queue)}, нейросеть ${fmtSec(t.synth)} (первый кусок ${fmtSec(t.first_chunk)}), кодирование ${fmtSec(t.encode)}` : "время синтеза";
+  $(".metrics", el).innerHTML = `<span title="${esc(tTitle)}">синтез ${fmtSec(meta.gen_time)}</span><span>аудио ${fmtSec(meta.audio_s)}</span><span title="от нажатия до ответа">задержка ${fmtSec(meta.latency)}</span>${meta.gen_time && meta.audio_s ? `<span title="время синтеза ÷ длительность аудио">RTF ${(meta.gen_time / meta.audio_s).toFixed(2)}</span>` : ""}`;
+  const url = URL.createObjectURL(blob);
+  const score = meta.score || 0, tags = meta.tags || [];
+  $(".body", el).innerHTML = `
+    <div class="player"><button class="play" aria-label="Слушать">▶</button><canvas class="wave" tabindex="0" aria-label="Волна, нажмите для перемотки"></canvas></div>
+    <audio preload="auto" src="${url}"></audio>
+    <dl class="lines"><dt>Текст</dt><dd>${esc(meta.input)}</dd>
+    <dt>Прочитано</dt><dd>${meta.normalized ? highlightChanges(meta.input, meta.normalized) : '<span class="muted">—</span>'}</dd></dl>
+    <div class="rate">
+      <span class="stars" role="radiogroup" aria-label="Оценка">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-n="${n}" class="${n <= score ? "on" : ""}" aria-label="${n} из 5">★</button>`).join("")}</span>
+      <span class="tags">${TAGS.map((t) => `<button type="button" class="tag" aria-pressed="${tags.includes(t)}">${t}</button>`).join("")}</span>
+      <input type="text" class="comment" placeholder="Комментарий" value="${esc(meta.comment || "")}">
+      <a class="btn ghost" href="${url}" download="${esc(meta.id || "take")}.wav">Скачать</a>
+      <button type="button" class="ghost danger del">Удалить</button>
+    </div>`;
+  const audio = $("audio", el), play = $(".play", el);
+  play.onclick = () => { $$("audio").forEach((a) => a !== audio && a.pause()); audio.paused ? audio.play() : audio.pause(); };
+  audio.onplay = () => (play.textContent = "❚❚");
+  audio.onpause = audio.onended = () => (play.textContent = "▶");
+  drawWave($("canvas", el), blob, audio);
+  const save = async () => {
+    if (!meta.id) return;
+    const s = $$(".stars .on", el).length || null;
+    const tg = $$(".tag[aria-pressed=true]", el).map((b) => b.textContent);
+    try { await api(`/api/outputs/${meta.id}/rate`, { json: { score: s, tags: tg, comment: $(".comment", el).value } }); loadSummary(); } catch (e) { toast(e.message); }
+  };
+  $$(".stars button", el).forEach((b) => (b.onclick = () => { const n = +b.dataset.n; $$(".stars button", el).forEach((x) => x.classList.toggle("on", +x.dataset.n <= n)); save(); toast(`Оценка ${n}`); }));
+  $$(".tag", el).forEach((b) => (b.onclick = () => { b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true"); save(); }));
+  $(".comment", el).addEventListener("change", save);
+  $(".del", el).onclick = async () => { if (meta.id) await api(`/api/outputs/${meta.id}`, { method: "DELETE" }).catch(() => {}); el.remove(); loadSummary(); };
+  renderTakesFilter();
+}
+
+async function loadHistory() {
+  const list = await api("/api/outputs?limit=30").catch(() => []);
+  if (!list.length) return;
+  $("#takes").innerHTML = "";
+  for (const m of list.reverse()) {
+    const el = newTakeCard(m, true);
+    fetch(`/api/outputs/${m.id}/audio`).then((r) => r.blob()).then((b) => fillTake(el, m, b)).catch(() => el.remove());
+  }
+}
+function renderTakesFilter() {
+  const only = $("#onlyThis").checked, id = $("#schemaModel").value;
+  $$(".take").forEach((t) => (t.hidden = only && t.dataset.model !== id));
+}
+$("#onlyThis").onchange = renderTakesFilter;
+
+async function loadSummary() {
+  const rows = await api("/api/summary").catch(() => []);
+  $("#summary").innerHTML = rows.length ? rows.map((r) => `<tr><td>${esc(modelTitle(r.model))}</td><td class="num">${r.avg_score ?? "—"}</td><td class="num">${r.rated} / ${r.outputs}</td><td class="num">${r.rtf ?? "—"}</td><td class="num">${fmtSec(r.avg_latency)}</td><td>${Object.entries(r.issues).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${esc(k)} ${v}`).join(", ") || "—"}</td></tr>`).join("") : '<tr><td colspan="6" class="muted">Пока нет оценок</td></tr>';
+}
+$("#refreshSummary").onclick = loadSummary;
+
+/* ---------- статус ---------- */
+async function pollStatus() {
+  try {
+    STATUS = await api("/api/status");
+    const st = STATUS.state || {}, w = STATUS.worker || {};
+    const s = st.running ? (w.status || "starting") : "stopped";
+    $("#statusPill").innerHTML = `<span class="dot ${s}"></span><span>${st.running ? esc(st.title || st.model) + " — " + (STATUS_RU[s] || s) : "модель не запущена"}</span>`;
+    $("#statusPill").title = w.error || "";
+    if (st.running && st.model && !store.get("schemaModel", null) && $("#schemaModel").value !== st.model) {
+      $("#schemaModel").value = st.model; renderSettings();
+    }
+    const other = st.running && st.model && st.model !== $("#schemaModel").value;
+    $("#schemaNote").innerHTML = other ? `<button type="button" class="ghost" id="switchSchema">на сервере запущена ${esc(st.title)} — переключить</button>` : "";
+    if (other) $("#switchSchema").onclick = () => { $("#schemaModel").value = st.model; store.set("schemaModel", st.model); renderSettings(); renderTakesFilter(); pollStatus(); };
+  } catch {}
+}
+
+(async function init() {
+  loadConn();
+  const cfg = await api("/api/config").catch(() => ({}));
+  const base = `http://${(cfg.lan_ips || [location.hostname])[0]}:${cfg.tts_port}/v1`;
+  $("#apiInfo").innerHTML = `<dt>Адрес</dt><dd><code class="copy">${esc(base)}</code></dd><dt>Ключ</dt><dd>${cfg.tts_api_key ? `<code class="copy">${esc(cfg.tts_api_key)}</code>` : "не нужен"}</dd><dt>Модель</dt><dd><code class="copy">${esc(cfg.model_alias)}</code></dd>`;
+  $$("#apiInfo .copy").forEach((c) => (c.onclick = () => copyText(c.textContent)));
+  [MODELS, REFS] = await Promise.all([api("/api/models"), api("/api/refs").catch(() => [])]);
+  $("#schemaModel").innerHTML = MODELS.map((m) => `<option value="${m.id}">${esc(m.title)}${m.installed.weights ? "" : " (не скачана)"}</option>`).join("");
+  await pollStatus();
+  const pick = store.get("schemaModel", null) || STATUS?.state?.model || MODELS[0].id;
+  $("#schemaModel").value = MODELS.some((m) => m.id === pick) ? pick : MODELS[0].id;
+  $("#text").value = store.get("text", PHRASES[0]);
+  renderSettings();
+  loadHistory(); loadSummary();
+  setInterval(pollStatus, 4000);
+})();
+</script>
+</body>
+</html>

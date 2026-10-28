@@ -1,0 +1,3 @@
+# сам fish-speech ставится из vendor/fish-speech (install.sh клонирует репозиторий)
+-r base.txt
+silero-stress>=1.5
